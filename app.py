@@ -376,8 +376,7 @@ st.caption("仅供个人研究参考，不构成投资建议。")
 
 with st.sidebar:
     st.header("扫描设置")
-    cache_desc = HISTORY_CACHE_DIR.resolve()
-    st.caption(f"本地缓存目录：{cache_desc}")
+    st.caption(f"本地缓存目录：{HISTORY_CACHE_DIR.as_posix()}")
     if st.button("清理本地缓存", help="删除已保存的历史行情缓存，下次将重新拉取。"):
         removed_count = clear_history_cache()
         st.success(f"已清理 {removed_count} 个缓存文件。")
