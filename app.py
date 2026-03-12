@@ -1,4 +1,5 @@
 ﻿import re
+import socket
 import time
 from pathlib import Path
 
@@ -44,6 +45,11 @@ HISTORY_CACHE_MAX_AGE = {
     "5y": 86400,
 }
 DEFAULT_CACHE_MAX_AGE = 43200
+EXTERNAL_DATA_SOURCES = [
+    ("Yahoo Finance API", "query1.finance.yahoo.com"),
+    ("Yahoo Finance", "finance.yahoo.com"),
+    ("FNArena", "fnarena.com"),
+]
 
 def to_1d_series(values):
     if values is None:
@@ -186,6 +192,44 @@ def fetch_history(ticker, period):
         return cached
 
     return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def diagnose_external_data_sources():
+    diagnostics = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    for service_name, host in EXTERNAL_DATA_SOURCES:
+        row = {
+            "数据源": service_name,
+            "域名": host,
+            "状态": "异常",
+            "详情": "",
+        }
+        try:
+            addrinfo = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            resolved_ips = sorted({item[4][0] for item in addrinfo if item[4]})
+            row["详情"] = f"DNS 正常，解析到 {', '.join(resolved_ips[:2])}"
+        except socket.gaierror as exc:
+            row["详情"] = f"DNS 解析失败：{exc}"
+            diagnostics.append(row)
+            continue
+
+        try:
+            response = requests.head(
+                f"https://{host}",
+                headers=headers,
+                timeout=8,
+                allow_redirects=True,
+            )
+            row["状态"] = "可访问"
+            row["详情"] = f"{row['详情']}，HTTP {response.status_code}"
+        except requests.RequestException as exc:
+            row["详情"] = f"{row['详情']}，HTTP 连接失败：{exc.__class__.__name__}"
+
+        diagnostics.append(row)
+
+    return pd.DataFrame(diagnostics)
 
 
 def classify_score(score, trend_ok, momentum_ok):
@@ -479,7 +523,13 @@ with st.spinner("正在运行多策略扫描..."):
     results = run_screener(tickers, period, cfg)
 
 if results.empty:
-    st.warning("未获取到有效股票数据，请检查代码或稍后重试。")
+    diagnostics = diagnose_external_data_sources()
+    st.warning("未获取到有效股票数据。")
+    if not diagnostics.empty and (diagnostics["状态"] != "可访问").any():
+        st.error("当前环境无法正常访问外部行情或指数数据源，常见原因是 DNS 或出网网络配置异常。")
+        st.dataframe(diagnostics, width="stretch", hide_index=True)
+    else:
+        st.info("代码格式看起来正常，建议优先检查股票代码、数据源临时限流，或稍后重试。")
     st.stop()
 
 buy_count = int((results["Rating"] == "可考虑买入").sum())
@@ -585,4 +635,3 @@ if close is not None and not close.empty:
 
 st.subheader("策略信号检查")
 st.dataframe(signal_table(selected_row), width="content", hide_index=True)
-
